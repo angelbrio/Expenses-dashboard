@@ -1,5 +1,5 @@
-import SheetsTest from "./components/SheetsTest";
+import SheetsTest from "@/app/components/SheetsTest";
 
-export default function Home() {
+export default function Page() {
   return <SheetsTest />;
 }

@@ -1,42 +1,67 @@
 import { NextResponse } from "next/server";
 import { google } from "googleapis";
+import { getFirebaseAdmin } from "@/lib/firebase.admin";
 
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
-function getEnv(name: string) {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env ${name}`);
-  return v;
+function getAuthClient() {
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (!raw) throw new Error("Missing env GOOGLE_SERVICE_ACCOUNT_JSON");
+
+  const creds = JSON.parse(raw);
+
+  return new google.auth.JWT({
+    email: creds.client_email,
+    key: creds.private_key,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+  });
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
-    const spreadsheetId = getEnv("GOOGLE_SHEETS_SPREADSHEET_ID");
-    const range = getEnv("GOOGLE_SHEETS_RANGE");
-    const json = getEnv("GOOGLE_SERVICE_ACCOUNT_JSON");
+    // 1) Auth header
+    const authHeader = req.headers.get("authorization") || "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    if (!token) return NextResponse.json({ error: "Missing token" }, { status: 401 });
 
-    const credentials = JSON.parse(json);
+    // 2) Verify Firebase token
+    const admin = getFirebaseAdmin();
+    const decoded = await admin.auth().verifyIdToken(token);
 
-    const auth = new google.auth.GoogleAuth({
-      credentials,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-    });
+    // 3) Optional allowlist
+    const allowed = process.env.ALLOWED_UID;
+    if (allowed && decoded.uid !== allowed) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
+    // 4) Sheet env
+    const spreadsheetId =
+      process.env.GOOGLE_SHEETS_SPREADSHEET_ID || process.env.SHEET_ID;
+    const range =
+      process.env.GOOGLE_SHEETS_RANGE || process.env.SHEET_RANGE || "2025!A1:Z1";
+
+    if (!spreadsheetId) {
+      return NextResponse.json({ error: "Missing env GOOGLE_SHEETS_SPREADSHEET_ID" }, { status: 500 });
+    }
+
+    // 5) Read sheet
+    const auth = getAuthClient();
     const sheets = google.sheets({ version: "v4", auth });
-    const resp = await sheets.spreadsheets.values.get({ spreadsheetId, range });
+
+    const resp = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range,
+    });
 
     return NextResponse.json({
       ok: true,
-      spreadsheetId,
-      range,
-      values: resp.data.values ?? [],
+      uid: decoded.uid,
+      email: decoded.email ?? null,
+      range: resp.data.range ?? range,
+      values: (resp.data.values ?? []) as string[][],
     });
-  } catch (err: any) {
-    // MUY IMPORTANTE: siempre devolver JSON (para evitar “Unexpected end of JSON input”)
-    return NextResponse.json(
-      { ok: false, error: err?.message ?? "Unknown error" },
-      { status: 500 }
-    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Error";
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
