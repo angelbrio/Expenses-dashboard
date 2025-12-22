@@ -2,10 +2,13 @@
 
 import { useEffect, useState } from "react";
 
+type ApiResp =
+  | { ok: true; spreadsheetId: string; range: string; values: any[][] }
+  | { ok?: false; error: string; details?: any };
+
 export default function SheetsTest() {
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<ApiResp | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
@@ -13,20 +16,20 @@ export default function SheetsTest() {
         const res = await fetch("/api/sheets", { cache: "no-store" });
         const text = await res.text();
 
-        let json: any;
+        let json: ApiResp;
         try {
-          json = text ? JSON.parse(text) : null;
+          json = text ? (JSON.parse(text) as ApiResp) : ({ ok: false, error: "Empty response" } as ApiResp);
         } catch {
-          throw new Error(`Respuesta no es JSON (HTTP ${res.status}): ${text.slice(0, 200)}`);
+          throw new Error("Respuesta no es JSON: " + text);
         }
 
-        if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
+        if (!res.ok || ("error" in json && json.error)) {
+          throw new Error(("error" in json && json.error) ? json.error : `HTTP ${res.status}`);
+        }
+
         setData(json);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setError(msg);
-      } finally {
-        setLoading(false);
+      } catch (e: any) {
+        setError(e?.message ?? "Error desconocido");
       }
     })();
   }, []);
@@ -34,9 +37,18 @@ export default function SheetsTest() {
   return (
     <main style={{ padding: 24 }}>
       <h1>Sheets test ✅</h1>
-      {loading && <p>Cargando...</p>}
+
       {error && <pre style={{ color: "tomato" }}>Error: {error}</pre>}
-      {data && <pre>{JSON.stringify(data, null, 2)}</pre>}
+
+      {!error && !data && <p>Cargando…</p>}
+
+      {data && "values" in data && (
+        <>
+          <p><b>Range:</b> {data.range}</p>
+          <p><b>Primera fila:</b></p>
+          <pre>{JSON.stringify(data.values?.[0] ?? [], null, 2)}</pre>
+        </>
+      )}
     </main>
   );
 }
