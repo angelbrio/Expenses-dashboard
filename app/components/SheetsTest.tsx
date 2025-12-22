@@ -13,20 +13,18 @@ export default function SheetsTest() {
         const res = await fetch("/api/sheets", { cache: "no-store" });
         const text = await res.text();
 
-        let json;
+        let json: any;
         try {
-          json = JSON.parse(text);
+          json = text ? JSON.parse(text) : null;
         } catch {
-          throw new Error("Respuesta no es JSON: " + text);
+          throw new Error(`Respuesta no es JSON (HTTP ${res.status}): ${text.slice(0, 200)}`);
         }
 
-        if (!res.ok || json?.error) {
-          throw new Error(json?.error || `HTTP ${res.status}`);
-        }
-
+        if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
         setData(json);
-      } catch (e: any) {
-        setError(e.message ?? "Error desconocido");
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setError(msg);
       } finally {
         setLoading(false);
       }
@@ -36,22 +34,9 @@ export default function SheetsTest() {
   return (
     <main style={{ padding: 24 }}>
       <h1>Sheets test ✅</h1>
-
       {loading && <p>Cargando...</p>}
-
-      {error && (
-        <pre style={{ color: "tomato" }}>
-          Error: {error}
-        </pre>
-      )}
-
-      {data && (
-        <>
-          <p><b>Range:</b> {data.range}</p>
-          <p><b>Primera fila:</b></p>
-          <pre>{JSON.stringify(data.values?.[0] ?? [], null, 2)}</pre>
-        </>
-      )}
+      {error && <pre style={{ color: "tomato" }}>Error: {error}</pre>}
+      {data && <pre>{JSON.stringify(data, null, 2)}</pre>}
     </main>
   );
 }
