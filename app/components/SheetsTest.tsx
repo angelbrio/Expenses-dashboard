@@ -1,20 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { auth } from "@/lib/firebase.client";
 import { GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
-
-type ApiResponse =
-  | { ok: true; range: string; values: string[][]; uid: string; email?: string | null }
-  | { error: string };
+import { auth } from "@/lib/firebase.client";
 
 export default function SheetsTest() {
   const [email, setEmail] = useState<string | null>(null);
   const [uid, setUid] = useState<string | null>(null);
 
-  const [data, setData] = useState<ApiResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [data, setData] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     return auth.onAuthStateChanged((u) => {
@@ -24,17 +20,16 @@ export default function SheetsTest() {
   }, []);
 
   async function login() {
-    setError(null);
     await signInWithPopup(auth, new GoogleAuthProvider());
   }
 
   async function logout() {
-    setError(null);
-    setData(null);
     await signOut(auth);
+    setData(null);
+    setError(null);
   }
 
-  async function loadSheet() {
+  async function readSheet() {
     setLoading(true);
     setError(null);
     setData(null);
@@ -44,28 +39,21 @@ export default function SheetsTest() {
       if (!user) throw new Error("No logueado");
 
       const token = await user.getIdToken();
-
       const res = await fetch("/api/sheets", {
         headers: { Authorization: `Bearer ${token}` },
         cache: "no-store",
       });
 
       const text = await res.text();
-      let json: ApiResponse;
+      const json = text ? JSON.parse(text) : null;
 
-      try {
-        json = text ? JSON.parse(text) : ({ error: "Empty response" } as ApiResponse);
-      } catch {
-        throw new Error("Respuesta no es JSON: " + text);
-      }
-
-      if (!res.ok || ("error" in json && json.error)) {
-        throw new Error(("error" in json && json.error) ? json.error : `HTTP ${res.status}`);
+      if (!res.ok || !json?.ok) {
+        throw new Error(json?.error || `HTTP ${res.status}`);
       }
 
       setData(json);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Error");
+    } catch (e: any) {
+      setError(e?.message || "Error");
     } finally {
       setLoading(false);
     }
@@ -75,40 +63,38 @@ export default function SheetsTest() {
     <main style={{ padding: 24 }}>
       <h1>Sheets + Firebase ✅</h1>
 
-      <p>
-        <b>Email:</b> {email ?? "—"} <br />
-        <b>UID:</b> {uid ?? "—"}
-      </p>
+      {email ? (
+        <>
+          <p><b>Email:</b> {email}</p>
+          <p><b>UID:</b> {uid}</p>
 
-      <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
-        {email ? (
-          <>
-            <button className="border px-4 py-2" onClick={loadSheet} disabled={loading}>
-              {loading ? "Cargando..." : "Leer Google Sheet"}
+          <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
+            <button onClick={readSheet} style={{ border: "1px solid #999", padding: "8px 12px" }}>
+              Leer Google Sheet
             </button>
-            <button className="border px-4 py-2" onClick={logout}>
+            <button onClick={logout} style={{ border: "1px solid #999", padding: "8px 12px" }}>
               Logout
             </button>
-          </>
-        ) : (
-          <button className="border px-4 py-2" onClick={login}>
-            Login con Google
-          </button>
-        )}
-      </div>
+          </div>
+        </>
+      ) : (
+        <button onClick={login} style={{ border: "1px solid #999", padding: "8px 12px" }}>
+          Login con Google
+        </button>
+      )}
 
-      {error && <pre style={{ color: "tomato", marginTop: 16 }}>Error: {error}</pre>}
+      {loading && <p style={{ marginTop: 16 }}>Cargando...</p>}
 
-      {data && "ok" in data && data.ok && (
-        <div style={{ marginTop: 16 }}>
-          <p>
-            <b>Range:</b> {data.range}
-          </p>
-          <p>
-            <b>Primera fila:</b>
-          </p>
-          <pre>{JSON.stringify(data.values?.[0] ?? [], null, 2)}</pre>
-        </div>
+      {error && (
+        <pre style={{ marginTop: 16, color: "tomato" }}>
+          Error: {error}
+        </pre>
+      )}
+
+      {data && (
+        <pre style={{ marginTop: 16 }}>
+          {JSON.stringify(data, null, 2)}
+        </pre>
       )}
     </main>
   );
