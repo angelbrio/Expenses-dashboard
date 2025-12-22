@@ -5,30 +5,45 @@ import { useEffect, useState } from "react";
 export default function SheetsTest() {
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
       try {
         const res = await fetch("/api/sheets", { cache: "no-store" });
-        const text = await res.text(); // primero texto, luego parse seguro
-        const json = text ? JSON.parse(text) : null;
+        const text = await res.text();
 
-        if (!res.ok || !json?.ok) {
+        let json;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          throw new Error("Respuesta no es JSON: " + text);
+        }
+
+        if (!res.ok || json?.error) {
           throw new Error(json?.error || `HTTP ${res.status}`);
         }
 
         setData(json);
       } catch (e: any) {
-        setError(e.message ?? "Error");
+        setError(e.message ?? "Error desconocido");
+      } finally {
+        setLoading(false);
       }
     })();
   }, []);
 
   return (
-    <div style={{ padding: 24 }}>
+    <main style={{ padding: 24 }}>
       <h1>Sheets test ✅</h1>
 
-      {error && <pre style={{ color: "tomato" }}>Error: {error}</pre>}
+      {loading && <p>Cargando...</p>}
+
+      {error && (
+        <pre style={{ color: "tomato" }}>
+          Error: {error}
+        </pre>
+      )}
 
       {data && (
         <>
@@ -37,6 +52,6 @@ export default function SheetsTest() {
           <pre>{JSON.stringify(data.values?.[0] ?? [], null, 2)}</pre>
         </>
       )}
-    </div>
+    </main>
   );
 }
