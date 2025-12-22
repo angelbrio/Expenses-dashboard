@@ -39,6 +39,7 @@ export default function SheetsTest() {
       if (!user) throw new Error("No logueado");
 
       const token = await user.getIdToken();
+
       const res = await fetch("/api/sheets", {
         headers: { Authorization: `Bearer ${token}` },
         cache: "no-store",
@@ -85,17 +86,9 @@ export default function SheetsTest() {
 
       {loading && <p style={{ marginTop: 16 }}>Cargando...</p>}
 
-      {error && (
-        <pre style={{ marginTop: 16, color: "tomato" }}>
-          Error: {error}
-        </pre>
-      )}
+      {error && <pre style={{ marginTop: 16, color: "tomato" }}>Error: {error}</pre>}
 
-      {data && (
-        <pre style={{ marginTop: 16 }}>
-          {JSON.stringify(data, null, 2)}
-        </pre>
-      )}
+      {data && <pre style={{ marginTop: 16 }}>{JSON.stringify(data, null, 2)}</pre>}
     </main>
   );
 }
