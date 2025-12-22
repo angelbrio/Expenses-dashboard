@@ -1,5 +1,14 @@
 "use client";
+
+import SheetsTest from "./components/SheetsTest";
+
+export default function Home() {
+  return <SheetsTest />;
+}
+
 import { useEffect, useState } from "react";
+
+import SheetsTest from "./components/SheetsTest";
 
 export default function Home() {
   const [data, setData] = useState<any>(null);

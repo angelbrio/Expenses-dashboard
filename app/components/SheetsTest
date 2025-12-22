@@ -1,0 +1,42 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+export default function SheetsTest() {
+  const [data, setData] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/sheets", { cache: "no-store" });
+        const text = await res.text(); // primero texto, luego parse seguro
+        const json = text ? JSON.parse(text) : null;
+
+        if (!res.ok || !json?.ok) {
+          throw new Error(json?.error || `HTTP ${res.status}`);
+        }
+
+        setData(json);
+      } catch (e: any) {
+        setError(e.message ?? "Error");
+      }
+    })();
+  }, []);
+
+  return (
+    <div style={{ padding: 24 }}>
+      <h1>Sheets test ✅</h1>
+
+      {error && <pre style={{ color: "tomato" }}>Error: {error}</pre>}
+
+      {data && (
+        <>
+          <p><b>Range:</b> {data.range}</p>
+          <p><b>Primera fila:</b></p>
+          <pre>{JSON.stringify(data.values?.[0] ?? [], null, 2)}</pre>
+        </>
+      )}
+    </div>
+  );
+}
