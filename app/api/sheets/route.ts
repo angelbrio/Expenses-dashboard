@@ -1,59 +1,27 @@
 import { NextResponse } from "next/server";
 import { google } from "googleapis";
 
-export const runtime = "nodejs"; // importante en Vercel
+export const runtime = "nodejs";
 
 export async function GET() {
-  try {
-    const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-    const sheetId = process.env.SHEET_ID;
-    const range = process.env.SHEET_RANGE || "Hoja 1!A1:Z1";
+  const SHEET_ID = process.env.SHEET_ID;
+  const RANGE = process.env.SHEET_RANGE || "2025!A1:Z1";
+  const JSON_RAW = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
 
-    if (!raw) {
-      return NextResponse.json(
-        { ok: false, error: "Missing env GOOGLE_SERVICE_ACCOUNT_JSON" },
-        { status: 500 }
-      );
-    }
-    if (!sheetId) {
-      return NextResponse.json(
-        { ok: false, error: "Missing env SHEET_ID" },
-        { status: 500 }
-      );
-    }
+  if (!SHEET_ID) return NextResponse.json({ error: "Missing env SHEET_ID" }, { status: 500 });
+  if (!JSON_RAW) return NextResponse.json({ error: "Missing env GOOGLE_SERVICE_ACCOUNT_JSON" }, { status: 500 });
 
-    // Si lo guardaste minificado en 1 línea en Vercel, esto debería parsear bien
-    const creds = JSON.parse(raw);
+  const creds = JSON.parse(JSON_RAW);
+  const auth = new google.auth.GoogleAuth({
+    credentials: creds,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+  });
 
-    const auth = new google.auth.GoogleAuth({
-      credentials: creds,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-    });
+  const sheets = google.sheets({ version: "v4", auth });
+  const resp = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: RANGE });
 
-    const sheets = google.sheets({ version: "v4", auth });
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: sheetId,
-      range,
-    });
-
-    const values = res.data.values ?? [];
-    const firstRow = values[0] ?? [];
-
-    return NextResponse.json({
-      ok: true,
-      range,
-      firstRow,
-      rawValues: values,
-    });
-  } catch (err: any) {
-    // MUY importante: devolver JSON siempre
-    return NextResponse.json(
-      {
-        ok: false,
-        error: err?.message || String(err),
-        name: err?.name,
-      },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({
+    range: resp.data.range,
+    values: resp.data.values ?? [],
+  });
 }
