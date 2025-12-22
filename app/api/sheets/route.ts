@@ -1,51 +1,47 @@
 import { NextResponse } from "next/server";
 import { google } from "googleapis";
-import { getFirebaseAdmin } from "@/lib/firebase.admin";
 
 export const runtime = "nodejs";
 
-function getAuthClient() {
+function getServiceAccount() {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!raw) throw new Error("Missing env GOOGLE_SERVICE_ACCOUNT_JSON");
 
-  const creds = JSON.parse(raw);
+  // Soporta JSON directo o Base64 (por si algún día prefieres base64)
+  const maybeJson = raw.trim().startsWith("{")
+    ? raw
+    : Buffer.from(raw, "base64").toString("utf8");
 
-  return new google.auth.JWT({
-    email: creds.client_email,
-    key: creds.private_key,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-  });
+  const sa = JSON.parse(maybeJson);
+
+  // Asegura que la private_key tenga saltos correctos
+  if (typeof sa.private_key === "string") {
+    sa.private_key = sa.private_key.replace(/\\n/g, "\n");
+  }
+
+  return sa;
 }
 
-export async function GET(req: Request) {
+export async function GET() {
   try {
-    // 1) Auth header
-    const authHeader = req.headers.get("authorization") || "";
-    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
-    if (!token) return NextResponse.json({ error: "Missing token" }, { status: 401 });
-
-    // 2) Verify Firebase token
-    const admin = getFirebaseAdmin();
-    const decoded = await admin.auth().verifyIdToken(token);
-
-    // 3) Optional allowlist
-    const allowed = process.env.ALLOWED_UID;
-    if (allowed && decoded.uid !== allowed) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-
-    // 4) Sheet env
-    const spreadsheetId =
-      process.env.GOOGLE_SHEETS_SPREADSHEET_ID || process.env.SHEET_ID;
-    const range =
-      process.env.GOOGLE_SHEETS_RANGE || process.env.SHEET_RANGE || "2025!A1:Z1";
+    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
+    const range = process.env.GOOGLE_SHEETS_RANGE;
 
     if (!spreadsheetId) {
-      return NextResponse.json({ error: "Missing env GOOGLE_SHEETS_SPREADSHEET_ID" }, { status: 500 });
+      return NextResponse.json({ ok: false, error: "Missing env GOOGLE_SHEETS_SPREADSHEET_ID" }, { status: 500 });
+    }
+    if (!range) {
+      return NextResponse.json({ ok: false, error: "Missing env GOOGLE_SHEETS_RANGE" }, { status: 500 });
     }
 
-    // 5) Read sheet
-    const auth = getAuthClient();
+    const sa = getServiceAccount();
+
+    const auth = new google.auth.JWT({
+      email: sa.client_email,
+      key: sa.private_key,
+      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    });
+
     const sheets = google.sheets({ version: "v4", auth });
 
     const resp = await sheets.spreadsheets.values.get({
@@ -55,13 +51,14 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       ok: true,
-      uid: decoded.uid,
-      email: decoded.email ?? null,
-      range: resp.data.range ?? range,
-      values: (resp.data.values ?? []) as string[][],
+      spreadsheetId,
+      range,
+      values: resp.data.values ?? [],
     });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Error";
-    return NextResponse.json({ error: msg }, { status: 500 });
+  } catch (e: any) {
+    return NextResponse.json(
+      { ok: false, error: e?.message ?? "Unknown error" },
+      { status: 500 }
+    );
   }
 }
