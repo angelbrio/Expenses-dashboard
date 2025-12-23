@@ -4,64 +4,61 @@ import admin from "firebase-admin";
 
 export const runtime = "nodejs";
 
-function parseServiceAccountFromEnv(opts: {
-  jsonEnvName?: string;
-  base64EnvName?: string;
-  label: string;
-}) {
-  const rawJson = opts.jsonEnvName ? process.env[opts.jsonEnvName] : undefined;
-  const rawB64 = opts.base64EnvName ? process.env[opts.base64EnvName] : undefined;
+function parseJsonOrBase64(raw: string) {
+  const s = (raw ?? "").trim();
+  if (!s) throw new Error("Empty credentials");
 
-  // Preferimos BASE64 siempre (más robusto en Vercel)
-  if (rawB64) {
-    const jsonText = Buffer.from(rawB64, "base64").toString("utf8");
-    return JSON.parse(jsonText);
+  // Si parece JSON, parse directo
+  if (s.startsWith("{")) return JSON.parse(s);
+
+  // Si no, asumimos base64
+  const decoded = Buffer.from(s, "base64").toString("utf8").trim();
+
+  // A veces viene con \n escapados
+  const normalized = decoded.replace(/\\n/g, "\n");
+
+  return JSON.parse(normalized);
+}
+
+function getEnvServiceAccount(prefix: "GOOGLE" | "FIREBASE") {
+  // Permite JSON plano o base64
+  const rawJson =
+    process.env[`${prefix}_SERVICE_ACCOUNT_JSON`] ||
+    process.env[`${prefix}_ADMIN_SERVICE_ACCOUNT_JSON`] ||
+    "";
+
+  const rawB64 =
+    process.env[`${prefix}_SERVICE_ACCOUNT_JSON_BASE64`] ||
+    process.env[`${prefix}_ADMIN_SERVICE_ACCOUNT_JSON_BASE64`] ||
+    "";
+
+  const raw = rawJson || rawB64;
+  if (!raw) {
+    throw new Error(
+      `Missing env ${prefix}_SERVICE_ACCOUNT_JSON (or ${prefix}_SERVICE_ACCOUNT_JSON_BASE64)`
+    );
   }
 
-  // Fallback: JSON plano (solo si está bien escapado con \n dentro de private_key)
-  if (rawJson) {
-    return JSON.parse(rawJson);
-  }
-
-  throw new Error(`Missing env for ${opts.label}: set ${opts.base64EnvName || opts.jsonEnvName}`);
+  return parseJsonOrBase64(raw);
 }
 
 function getFirebaseAdmin() {
   if (admin.apps.length) return admin;
 
-  const sa = parseServiceAccountFromEnv({
-    jsonEnvName: "FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON",
-    base64EnvName: "FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON_BASE64",
-    label: "Firebase Admin service account",
-  });
+  const serviceAccount = getEnvServiceAccount("FIREBASE");
 
   admin.initializeApp({
-    credential: admin.credential.cert(sa),
+    credential: admin.credential.cert(serviceAccount),
   });
 
   return admin;
 }
 
-function getSheetsAuth() {
-  const sa = parseServiceAccountFromEnv({
-    jsonEnvName: "GOOGLE_SERVICE_ACCOUNT_JSON",
-    base64EnvName: "GOOGLE_SERVICE_ACCOUNT_JSON_BASE64",
-    label: "Google Sheets service account",
-  });
-
-  return new google.auth.JWT({
-    email: sa.client_email,
-    key: sa.private_key,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-  });
-}
-
 export async function GET(req: Request) {
   try {
-    // --- Auth Firebase (recomendado si el sheet es privado) ---
+    // --- Auth obligatorio ---
     const authHeader = req.headers.get("authorization") || "";
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
-
     if (!token) {
       return NextResponse.json({ ok: false, error: "Missing Bearer token" }, { status: 401 });
     }
@@ -75,15 +72,8 @@ export async function GET(req: Request) {
     }
 
     // --- Sheets env ---
-    const spreadsheetId =
-      process.env.GOOGLE_SHEETS_SPREADSHEET_ID ||
-      process.env.SHEET_ID ||
-      "";
-
-    const range =
-      process.env.GOOGLE_SHEETS_RANGE ||
-      process.env.SHEET_RANGE ||
-      "2025!A1:Z1";
+    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID || process.env.SHEET_ID || "";
+    const range = process.env.GOOGLE_SHEETS_RANGE || process.env.SHEET_RANGE || "2025!A1:Z1";
 
     if (!spreadsheetId) {
       return NextResponse.json(
@@ -92,7 +82,14 @@ export async function GET(req: Request) {
       );
     }
 
-    const jwt = getSheetsAuth();
+    const sa = getEnvServiceAccount("GOOGLE");
+
+    const jwt = new google.auth.JWT({
+      email: sa.client_email,
+      key: sa.private_key,
+      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    });
+
     const sheets = google.sheets({ version: "v4", auth: jwt });
     const resp = await sheets.spreadsheets.values.get({ spreadsheetId, range });
 
@@ -105,6 +102,9 @@ export async function GET(req: Request) {
       values: resp.data.values ?? [],
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || "Unknown error" }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e?.message || "Unknown error" },
+      { status: 500 }
+    );
   }
 }

@@ -48,9 +48,7 @@ export default function SheetsTest() {
       const text = await res.text();
       const json = text ? JSON.parse(text) : null;
 
-      if (!res.ok || !json?.ok) {
-        throw new Error(json?.error || `HTTP ${res.status}`);
-      }
+      if (!res.ok || !json?.ok) throw new Error(json?.error || `HTTP ${res.status}`);
 
       setData(json);
     } catch (e: any) {
