@@ -4,48 +4,38 @@ import admin from "firebase-admin";
 
 export const runtime = "nodejs";
 
+function looksLikeBase64(s: string) {
+  // base64 suele ser largo y solo [A-Za-z0-9+/=]
+  return s.length > 100 && /^[A-Za-z0-9+/=]+$/.test(s) && !s.trim().startsWith("{");
+}
+
 function parseJsonOrBase64(raw: string) {
-  const s = (raw ?? "").trim();
-  if (!s) throw new Error("Empty credentials");
+  const trimmed = raw.trim();
 
-  // Si parece JSON, parse directo
-  if (s.startsWith("{")) return JSON.parse(s);
+  // Si parece base64, lo decodificamos
+  const decoded = looksLikeBase64(trimmed)
+    ? Buffer.from(trimmed, "base64").toString("utf8")
+    : trimmed;
 
-  // Si no, asumimos base64
-  const decoded = Buffer.from(s, "base64").toString("utf8").trim();
-
-  // A veces viene con \n escapados
+  // Normaliza \n escapados (típico en claves privadas)
   const normalized = decoded.replace(/\\n/g, "\n");
 
   return JSON.parse(normalized);
 }
 
-function getEnvServiceAccount(prefix: "GOOGLE" | "FIREBASE") {
-  // Permite JSON plano o base64
-  const rawJson =
-    process.env[`${prefix}_SERVICE_ACCOUNT_JSON`] ||
-    process.env[`${prefix}_ADMIN_SERVICE_ACCOUNT_JSON`] ||
-    "";
-
-  const rawB64 =
-    process.env[`${prefix}_SERVICE_ACCOUNT_JSON_BASE64`] ||
-    process.env[`${prefix}_ADMIN_SERVICE_ACCOUNT_JSON_BASE64`] ||
-    "";
-
-  const raw = rawJson || rawB64;
-  if (!raw) {
-    throw new Error(
-      `Missing env ${prefix}_SERVICE_ACCOUNT_JSON (or ${prefix}_SERVICE_ACCOUNT_JSON_BASE64)`
-    );
-  }
-
-  return parseJsonOrBase64(raw);
-}
-
 function getFirebaseAdmin() {
   if (admin.apps.length) return admin;
 
-  const serviceAccount = getEnvServiceAccount("FIREBASE");
+  const raw =
+    process.env.FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON ||
+    process.env.FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON_BASE64 ||
+    process.env.FIREBASE_SERVICE_ACCOUNT_JSON ||
+    process.env.FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 ||
+    "";
+
+  if (!raw) throw new Error("Missing env FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON (or *_BASE64)");
+
+  const serviceAccount = parseJsonOrBase64(raw);
 
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
@@ -54,11 +44,27 @@ function getFirebaseAdmin() {
   return admin;
 }
 
+function getSheetsServiceAccount() {
+  const raw =
+    process.env.GOOGLE_SERVICE_ACCOUNT_JSON ||
+    process.env.GOOGLE_SERVICE_ACCOUNT_JSON_BASE64 ||
+    process.env.GOOGLE_SERVICE_ACCOUNT ||
+    process.env.GCP_SERVICE_ACCOUNT_JSON ||
+    process.env.GOOGLE_SERVICE_ACCOUNT_BASE64 ||
+    process.env.GCP_SERVICE_ACCOUNT_JSON_BASE64 ||
+    "";
+
+  if (!raw) throw new Error("Missing env GOOGLE_SERVICE_ACCOUNT_JSON (or *_BASE64)");
+
+  return parseJsonOrBase64(raw);
+}
+
 export async function GET(req: Request) {
   try {
-    // --- Auth obligatorio ---
+    // --- Auth Firebase (obligatorio porque tú lo estás usando desde el cliente) ---
     const authHeader = req.headers.get("authorization") || "";
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+
     if (!token) {
       return NextResponse.json({ ok: false, error: "Missing Bearer token" }, { status: 401 });
     }
@@ -72,8 +78,16 @@ export async function GET(req: Request) {
     }
 
     // --- Sheets env ---
-    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID || process.env.SHEET_ID || "";
-    const range = process.env.GOOGLE_SHEETS_RANGE || process.env.SHEET_RANGE || "2025!A1:Z1";
+    const spreadsheetId =
+      process.env.GOOGLE_SHEETS_SPREADSHEET_ID ||
+      process.env.SHEET_ID ||
+      process.env.GOOGLE_SHEETS_SPREADSHEETID ||
+      "";
+
+    const range =
+      process.env.GOOGLE_SHEETS_RANGE ||
+      process.env.SHEET_RANGE ||
+      "2025!A1:Z1";
 
     if (!spreadsheetId) {
       return NextResponse.json(
@@ -82,7 +96,7 @@ export async function GET(req: Request) {
       );
     }
 
-    const sa = getEnvServiceAccount("GOOGLE");
+    const sa = getSheetsServiceAccount();
 
     const jwt = new google.auth.JWT({
       email: sa.client_email,
@@ -102,9 +116,6 @@ export async function GET(req: Request) {
       values: resp.data.values ?? [],
     });
   } catch (e: any) {
-    return NextResponse.json(
-      { ok: false, error: e?.message || "Unknown error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, error: e?.message || "Unknown error" }, { status: 500 });
   }
 }
