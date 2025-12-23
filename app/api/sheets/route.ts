@@ -4,58 +4,61 @@ import admin from "firebase-admin";
 
 export const runtime = "nodejs";
 
+function parseServiceAccountFromEnv(opts: {
+  jsonEnvName?: string;
+  base64EnvName?: string;
+  label: string;
+}) {
+  const rawJson = opts.jsonEnvName ? process.env[opts.jsonEnvName] : undefined;
+  const rawB64 = opts.base64EnvName ? process.env[opts.base64EnvName] : undefined;
+
+  // Preferimos BASE64 siempre (más robusto en Vercel)
+  if (rawB64) {
+    const jsonText = Buffer.from(rawB64, "base64").toString("utf8");
+    return JSON.parse(jsonText);
+  }
+
+  // Fallback: JSON plano (solo si está bien escapado con \n dentro de private_key)
+  if (rawJson) {
+    return JSON.parse(rawJson);
+  }
+
+  throw new Error(`Missing env for ${opts.label}: set ${opts.base64EnvName || opts.jsonEnvName}`);
+}
+
 function getFirebaseAdmin() {
   if (admin.apps.length) return admin;
 
-  const raw =
-    process.env.FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON ||
-    process.env.FIREBASE_SERVICE_ACCOUNT_JSON ||
-    "";
-
-  if (!raw) throw new Error("Missing env FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON");
+  const sa = parseServiceAccountFromEnv({
+    jsonEnvName: "FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON",
+    base64EnvName: "FIREBASE_ADMIN_SERVICE_ACCOUNT_JSON_BASE64",
+    label: "Firebase Admin service account",
+  });
 
   admin.initializeApp({
-    credential: admin.credential.cert(JSON.parse(raw)),
+    credential: admin.credential.cert(sa),
   });
 
   return admin;
 }
 
-function getSheetsServiceAccountJson() {
-  // 1) Normal JSON env
-  let raw =
-    process.env.GOOGLE_SERVICE_ACCOUNT_JSON ||
-    process.env.GOOGLE_SERVICE_ACCOUNT ||
-    process.env.GCP_SERVICE_ACCOUNT_JSON ||
-    "";
+function getSheetsAuth() {
+  const sa = parseServiceAccountFromEnv({
+    jsonEnvName: "GOOGLE_SERVICE_ACCOUNT_JSON",
+    base64EnvName: "GOOGLE_SERVICE_ACCOUNT_JSON_BASE64",
+    label: "Google Sheets service account",
+  });
 
-  // 2) Base64 fallback (opcional)
-  const b64 = process.env.GOOGLE_SERVICE_ACCOUNT_JSON_BASE64 || "";
-  if (!raw && b64) {
-    raw = Buffer.from(b64, "base64").toString("utf8");
-  }
-
-  if (!raw) {
-    // Debug: SOLO indica si existen, no muestra valores
-    return {
-      __missing: true,
-      present: {
-        GOOGLE_SERVICE_ACCOUNT_JSON: !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
-        GOOGLE_SERVICE_ACCOUNT: !!process.env.GOOGLE_SERVICE_ACCOUNT,
-        GCP_SERVICE_ACCOUNT_JSON: !!process.env.GCP_SERVICE_ACCOUNT_JSON,
-        GOOGLE_SERVICE_ACCOUNT_JSON_BASE64: !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON_BASE64,
-      },
-    } as any;
-  }
-
-  // Por si el JSON vino con \n escapados
-  raw = raw.replace(/\\n/g, "\n");
-  return JSON.parse(raw);
+  return new google.auth.JWT({
+    email: sa.client_email,
+    key: sa.private_key,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+  });
 }
 
 export async function GET(req: Request) {
   try {
-    // --- Auth (obligatorio si quieres protegerlo) ---
+    // --- Auth Firebase (recomendado si el sheet es privado) ---
     const authHeader = req.headers.get("authorization") || "";
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
 
@@ -89,20 +92,7 @@ export async function GET(req: Request) {
       );
     }
 
-    const sa = getSheetsServiceAccountJson();
-    if ((sa as any).__missing) {
-      return NextResponse.json(
-        { ok: false, error: "Missing env GOOGLE_SERVICE_ACCOUNT_JSON", debug: (sa as any).present },
-        { status: 500 }
-      );
-    }
-
-    const jwt = new google.auth.JWT({
-      email: sa.client_email,
-      key: sa.private_key,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-    });
-
+    const jwt = getSheetsAuth();
     const sheets = google.sheets({ version: "v4", auth: jwt });
     const resp = await sheets.spreadsheets.values.get({ spreadsheetId, range });
 
