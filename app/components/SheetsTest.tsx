@@ -46,9 +46,17 @@ export default function SheetsTest() {
       });
 
       const text = await res.text();
-      const json = text ? JSON.parse(text) : null;
 
-      if (!res.ok || !json?.ok) throw new Error(json?.error || `HTTP ${res.status}`);
+      let json: any = null;
+      try {
+        json = text ? JSON.parse(text) : null;
+      } catch {
+        throw new Error("Respuesta no es JSON: " + text);
+      }
+
+      if (!res.ok || !json?.ok) {
+        throw new Error(json?.error || `HTTP ${res.status}`);
+      }
 
       setData(json);
     } catch (e: any) {
@@ -64,14 +72,26 @@ export default function SheetsTest() {
 
       {email ? (
         <>
-          <p><b>Email:</b> {email}</p>
-          <p><b>UID:</b> {uid}</p>
+          <p>
+            <b>Email:</b> {email}
+          </p>
+          <p>
+            <b>UID:</b> {uid}
+          </p>
 
           <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
-            <button onClick={readSheet} style={{ border: "1px solid #999", padding: "8px 12px" }}>
+            <button
+              onClick={readSheet}
+              style={{ border: "1px solid #999", padding: "8px 12px" }}
+              disabled={loading}
+            >
               Leer Google Sheet
             </button>
-            <button onClick={logout} style={{ border: "1px solid #999", padding: "8px 12px" }}>
+            <button
+              onClick={logout}
+              style={{ border: "1px solid #999", padding: "8px 12px" }}
+              disabled={loading}
+            >
               Logout
             </button>
           </div>
