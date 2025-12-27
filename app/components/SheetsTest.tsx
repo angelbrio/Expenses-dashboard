@@ -5,23 +5,27 @@ import { useEffect, useState } from "react";
 export default function SheetsTest() {
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
       try {
         const res = await fetch("/api/sheets", { cache: "no-store" });
-        const json = await res.json();
+        const text = await res.text();
 
-        if (!res.ok || !json.ok) {
-          throw new Error(json.error || "Error");
+        let json: any;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          throw new Error("Respuesta no es JSON: " + text);
+        }
+
+        if (!res.ok || !json?.ok) {
+          throw new Error(json?.error || `HTTP ${res.status}`);
         }
 
         setData(json);
       } catch (e: any) {
-        setError(e.message);
-      } finally {
-        setLoading(false);
+        setError(e?.message || "Error");
       }
     })();
   }, []);
@@ -30,13 +34,9 @@ export default function SheetsTest() {
     <main style={{ padding: 24 }}>
       <h1>Google Sheets ✅</h1>
 
-      {loading && <p>Cargando…</p>}
-
       {error && <pre style={{ color: "tomato" }}>{error}</pre>}
 
-      {data && (
-        <pre>{JSON.stringify(data.values, null, 2)}</pre>
-      )}
+      {data && <pre>{JSON.stringify(data, null, 2)}</pre>}
     </main>
   );
 }
