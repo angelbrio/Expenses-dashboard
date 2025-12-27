@@ -1,67 +1,41 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 export default function SheetsTest() {
-  const [loading, setLoading] = useState(false);
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  async function readSheet() {
-    setLoading(true);
-    setError(null);
-    setData(null);
-
-    try {
-      const res = await fetch("/api/sheets", { cache: "no-store" });
-      const text = await res.text();
-
-      let json;
+  useEffect(() => {
+    (async () => {
       try {
-        json = JSON.parse(text);
-      } catch {
-        throw new Error("Respuesta no es JSON: " + text);
-      }
+        const res = await fetch("/api/sheets", { cache: "no-store" });
+        const json = await res.json();
 
-      if (!res.ok || !json?.ok) {
-        throw new Error(json?.error || `HTTP ${res.status}`);
-      }
+        if (!res.ok || !json.ok) {
+          throw new Error(json.error || "Error");
+        }
 
-      setData(json);
-    } catch (e: any) {
-      setError(e.message || "Error");
-    } finally {
-      setLoading(false);
-    }
-  }
+        setData(json);
+      } catch (e: any) {
+        setError(e.message);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
 
   return (
     <main style={{ padding: 24 }}>
-      <h1>Google Sheets Test ✅</h1>
+      <h1>Google Sheets ✅</h1>
 
-      <button
-        onClick={readSheet}
-        disabled={loading}
-        style={{ border: "1px solid #999", padding: "8px 12px" }}
-      >
-        Leer Google Sheet
-      </button>
+      {loading && <p>Cargando…</p>}
 
-      {loading && <p style={{ marginTop: 16 }}>Cargando…</p>}
-
-      {error && (
-        <pre style={{ marginTop: 16, color: "tomato" }}>
-          Error: {error}
-        </pre>
-      )}
+      {error && <pre style={{ color: "tomato" }}>{error}</pre>}
 
       {data && (
-        <>
-          <p><b>Range:</b> {data.range}</p>
-          <pre style={{ marginTop: 16 }}>
-            {JSON.stringify(data.values?.[0] ?? [], null, 2)}
-          </pre>
-        </>
+        <pre>{JSON.stringify(data.values, null, 2)}</pre>
       )}
     </main>
   );

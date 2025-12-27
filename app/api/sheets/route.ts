@@ -3,21 +3,21 @@ import { google } from "googleapis";
 
 export const runtime = "nodejs";
 
-function mustGetEnv(name: string) {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env ${name}`);
-  return v;
-}
-
 export async function GET() {
   try {
-    const spreadsheetId = mustGetEnv("GOOGLE_SHEETS_SPREADSHEET_ID");
-    const range = process.env.GOOGLE_SHEETS_RANGE || "2025!A1:Z1";
+    const spreadsheetId = process.env.SHEET_ID;
+    const range = process.env.SHEET_RANGE || "A1:Z10";
+    const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
 
-    // JSON en una sola línea, con \n escapados
-    const raw = mustGetEnv("GOOGLE_SERVICE_ACCOUNT_JSON");
-    const fixed = raw.replace(/\\n/g, "\n");
-    const sa = JSON.parse(fixed);
+    if (!spreadsheetId) {
+      return NextResponse.json({ ok: false, error: "Missing SHEET_ID" }, { status: 500 });
+    }
+
+    if (!raw) {
+      return NextResponse.json({ ok: false, error: "Missing GOOGLE_SERVICE_ACCOUNT_JSON" }, { status: 500 });
+    }
+
+    const sa = JSON.parse(raw);
 
     const auth = new google.auth.JWT({
       email: sa.client_email,
@@ -26,7 +26,8 @@ export async function GET() {
     });
 
     const sheets = google.sheets({ version: "v4", auth });
-    const resp = await sheets.spreadsheets.values.get({
+
+    const res = await sheets.spreadsheets.values.get({
       spreadsheetId,
       range,
     });
@@ -35,11 +36,11 @@ export async function GET() {
       ok: true,
       spreadsheetId,
       range,
-      values: resp.data.values ?? [],
+      values: res.data.values ?? [],
     });
   } catch (e: any) {
     return NextResponse.json(
-      { ok: false, error: e.message || "Unknown error" },
+      { ok: false, error: e.message ?? "Unknown error" },
       { status: 500 }
     );
   }
