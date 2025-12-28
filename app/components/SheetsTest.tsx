@@ -17,8 +17,8 @@ function toNumber(v: any): number {
   const normalized = s
     .replace(/\s/g, "")
     .replace("€", "")
-    .replace(/\./g, "") // miles
-    .replace(",", "."); // decimales
+    .replace(/\./g, "")
+    .replace(",", ".");
 
   const n = Number(normalized);
   return Number.isFinite(n) ? n : 0;
@@ -28,12 +28,19 @@ function formatEUR(n: number) {
   return n.toLocaleString("es-ES", { style: "currency", currency: "EUR" });
 }
 
-function findCol(headers: any[], candidates: string[]): number | null {
-  const norm = (x: any) => String(x ?? "").trim().toUpperCase();
-  const H = headers.map(norm);
+// Normaliza para comparar headers (sin tildes, trim, uppercase)
+function normHeader(x: any) {
+  return String(x ?? "")
+    .trim()
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, ""); // quita acentos
+}
 
+function findCol(headers: any[], candidates: string[]): number | null {
+  const H = headers.map(normHeader);
   for (const c of candidates) {
-    const idx = H.indexOf(norm(c));
+    const idx = H.indexOf(normHeader(c));
     if (idx !== -1) return idx;
   }
   return null;
@@ -69,11 +76,20 @@ export default function SheetsTest() {
     }
   }
 
-  const summary = useMemo(() => {
-    if (!data || !data.ok) return { ingresos: 0, gastos: 0, ahorro: 0, inversion: 0 };
+  const { ingresos, gastos, ahorro, inversion, patrimonio, notificaciones } = useMemo(() => {
+    const empty = {
+      ingresos: 0,
+      gastos: 0,
+      ahorro: 0,
+      inversion: 0,
+      patrimonio: 0,
+      notificaciones: [] as { w: string; x: string; y: string }[],
+    };
+
+    if (!data || !data.ok) return empty;
 
     const values = data.values ?? [];
-    if (values.length <= 1) return { ingresos: 0, gastos: 0, ahorro: 0, inversion: 0 };
+    if (values.length <= 1) return empty;
 
     const headers = values[0] ?? [];
     const rows = values.slice(1);
@@ -86,50 +102,71 @@ export default function SheetsTest() {
       effective.push(r ?? []);
     }
 
-    // --- Columnas por header (robusto) ---
-    // Gastos: usamos los TOTAL_* de categorías (como ya te funciona)
+    // --- gastos: TOTAL_* ---
     const colTotalMensual = findCol(headers, ["TOTAL_MENSUAL", "TOTAL_MENSU"]);
     const colTotalOcio = findCol(headers, ["TOTAL_OCIO"]);
     const colTotalTrabajo = findCol(headers, ["TOTAL_TRABAJO"]);
     const colTotalDeporte = findCol(headers, ["TOTAL_DEPORTE"]);
     const colTotalComida = findCol(headers, ["TOTAL_COMIDA"]);
-    const colTotalNoClasificado = findCol(headers, ["TOTAL", "TOTAL_NO_CLASIFICADO"]);
+    const colTotalNoClasificado = findCol(headers, ["TOTAL_NO_CLASIFICADO", "TOTAL"]);
 
-    // Ingresos / Ahorro / Inversión:
-    // si existen TOTAL_* los usamos; si no, usamos INGRESOS / AHORRO / INVERSION
+    // --- ingresos/ahorro/inversion ---
     const colTotalIngresos = findCol(headers, ["TOTAL_INGRESOS"]);
-    const colIngresos = findCol(headers, ["INGRESOS"]); // en tu caso Q
-    const colTotalAhorro = findCol(headers, ["TOTAL_AHORRO"]);
-    const colAhorro = findCol(headers, ["AHORRO"]); // en tu caso T
-    const colInversion = findCol(headers, ["INVERSION", "INVERSIÓN"]); // tu Z
+    const colIngresos = findCol(headers, ["INGRESOS"]);
 
-    let gastos = 0;
-    let ingresos = 0;
-    let ahorro = 0;
-    let inversion = 0;
+    const colTotalAhorro = findCol(headers, ["TOTAL_AHORRO"]);
+    const colAhorro = findCol(headers, ["AHORRO"]);
+
+    // inversión: soporta INVERSION / INVERSIÓN
+    const colInversion = findCol(headers, ["INVERSION", "INVERSIÓN"]);
+
+    // Notificaciones SC: columnas W, X, Y (por letra)
+    const idxW = 22; // W (0-based)
+    const idxX = 23; // X
+    const idxY = 24; // Y
+
+    let _gastos = 0;
+    let _ingresos = 0;
+    let _ahorro = 0;
+    let _inversion = 0;
+
+    const _notifs: { w: string; x: string; y: string }[] = [];
 
     for (const r of effective) {
-      // Gastos (solo si la columna existe)
-      if (colTotalMensual !== null) gastos += toNumber(r[colTotalMensual]);
-      if (colTotalOcio !== null) gastos += toNumber(r[colTotalOcio]);
-      if (colTotalTrabajo !== null) gastos += toNumber(r[colTotalTrabajo]);
-      if (colTotalDeporte !== null) gastos += toNumber(r[colTotalDeporte]);
-      if (colTotalComida !== null) gastos += toNumber(r[colTotalComida]);
-      if (colTotalNoClasificado !== null) gastos += toNumber(r[colTotalNoClasificado]);
+      // gastos
+      if (colTotalMensual !== null) _gastos += toNumber(r[colTotalMensual]);
+      if (colTotalOcio !== null) _gastos += toNumber(r[colTotalOcio]);
+      if (colTotalTrabajo !== null) _gastos += toNumber(r[colTotalTrabajo]);
+      if (colTotalDeporte !== null) _gastos += toNumber(r[colTotalDeporte]);
+      if (colTotalComida !== null) _gastos += toNumber(r[colTotalComida]);
+      if (colTotalNoClasificado !== null) _gastos += toNumber(r[colTotalNoClasificado]);
 
-      // Ingresos: preferimos TOTAL_INGRESOS, si no existe usamos INGRESOS
-      if (colTotalIngresos !== null) ingresos += toNumber(r[colTotalIngresos]);
-      else if (colIngresos !== null) ingresos += toNumber(r[colIngresos]);
+      // ingresos
+      if (colTotalIngresos !== null) _ingresos += toNumber(r[colTotalIngresos]);
+      else if (colIngresos !== null) _ingresos += toNumber(r[colIngresos]);
 
-      // Ahorro: preferimos TOTAL_AHORRO, si no existe usamos AHORRO
-      if (colTotalAhorro !== null) ahorro += toNumber(r[colTotalAhorro]);
-      else if (colAhorro !== null) ahorro += toNumber(r[colAhorro]);
+      // ahorro
+      if (colTotalAhorro !== null) _ahorro += toNumber(r[colTotalAhorro]);
+      else if (colAhorro !== null) _ahorro += toNumber(r[colAhorro]);
 
-      // Inversión
-      if (colInversion !== null) inversion += toNumber(r[colInversion]);
+      // inversion
+      if (colInversion !== null) _inversion += toNumber(r[colInversion]);
+
+      // notificaciones (W/X/Y)
+      const w = String(r[idxW] ?? "").trim();
+      const x = String(r[idxX] ?? "").trim();
+      const y = String(r[idxY] ?? "").trim();
+      if (w || x || y) _notifs.push({ w, x, y });
     }
 
-    return { ingresos, gastos, ahorro, inversion };
+    return {
+      ingresos: _ingresos,
+      gastos: _gastos,
+      ahorro: _ahorro,
+      inversion: _inversion,
+      patrimonio: _ingresos - _gastos,
+      notificaciones: _notifs,
+    };
   }, [data]);
 
   return (
@@ -143,20 +180,48 @@ export default function SheetsTest() {
       </div>
 
       <h2>Resumen</h2>
-      <p><b>Ingresos:</b> {formatEUR(summary.ingresos)}</p>
-      <p><b>Gastos:</b> {formatEUR(summary.gastos)}</p>
-      <p><b>Ahorro:</b> {formatEUR(summary.ahorro)}</p>
-      <p><b>Inversión:</b> {formatEUR(summary.inversion)}</p>
+      <p><b>Ingresos:</b> {formatEUR(ingresos)}</p>
+      <p><b>Gastos:</b> {formatEUR(gastos)}</p>
+      <p><b>Ahorro:</b> {formatEUR(ahorro)}</p>
+      <p><b>Inversión:</b> {formatEUR(inversion)}</p>
+      <p><b>Patrimonio:</b> {formatEUR(patrimonio)}</p>
 
       {loading && <p style={{ marginTop: 16 }}>Cargando...</p>}
       {error && <pre style={{ marginTop: 16, color: "tomato" }}>Error: {error}</pre>}
 
-      {data && (
-        <details style={{ marginTop: 16 }}>
-          <summary>Ver JSON completo</summary>
-          <pre>{JSON.stringify(data, null, 2)}</pre>
-        </details>
-      )}
+      <div
+        style={{
+          marginTop: 20,
+          border: "1px solid #ddd",
+          borderRadius: 8,
+          padding: 16,
+          background: "#fafafa",
+        }}
+      >
+        <h3 style={{ marginTop: 0 }}>Notificaciones SC</h3>
+
+        {notificaciones.length === 0 ? (
+          <p style={{ margin: 0, color: "#666" }}>Sin notificaciones.</p>
+        ) : (
+          <div style={{ display: "grid", gap: 10 }}>
+            {notificaciones.map((n, i) => (
+              <div
+                key={i}
+                style={{
+                  border: "1px solid #e5e5e5",
+                  borderRadius: 8,
+                  padding: 12,
+                  background: "white",
+                }}
+              >
+                <div><b>W:</b> {n.w || "—"}</div>
+                <div><b>X:</b> {n.x || "—"}</div>
+                <div><b>Y:</b> {n.y || "—"}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </main>
   );
 }
