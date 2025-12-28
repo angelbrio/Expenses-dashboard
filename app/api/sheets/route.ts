@@ -3,30 +3,61 @@ import { google } from "googleapis";
 
 export const runtime = "nodejs";
 
-function getSheetsServiceAccountJson() {
-  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "";
-  if (!raw) throw new Error("Missing env GOOGLE_SERVICE_ACCOUNT_JSON");
+function parseServiceAccount(raw: string) {
+  const input = (raw ?? "").trim().replace(/\r/g, "");
 
-  // Por si el JSON viene con \n escapados (típico en Vercel env vars)
-  const fixed = raw.replace(/\\n/g, "\n");
-  return JSON.parse(fixed);
+  // 1) Intento normal: JSON válido
+  try {
+    const obj = JSON.parse(input);
+    if (obj?.private_key && typeof obj.private_key === "string") {
+      obj.private_key = obj.private_key.replace(/\\n/g, "\n");
+    }
+    return obj;
+  } catch {
+    // 2) Fallback: Vercel a veces mete saltos de línea reales dentro de private_key (JSON inválido)
+    const clientEmail =
+      input.match(/"client_email"\s*:\s*"([^"]+)"/)?.[1] ?? null;
+
+    const pkRaw =
+      input.match(/"private_key"\s*:\s*"([\s\S]*?)"\s*,\s*"/)?.[1] ?? null;
+
+    if (!clientEmail || !pkRaw) {
+      throw new Error(
+        "GOOGLE_SERVICE_ACCOUNT_JSON inválido. Asegúrate de pegar el JSON completo."
+      );
+    }
+
+    const privateKey = pkRaw.replace(/\\n/g, "\n"); // por si venía escapado
+    return { client_email: clientEmail, private_key: privateKey };
+  }
 }
 
 export async function GET() {
   try {
-    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID || "";
+    const spreadsheetId =
+      process.env.GOOGLE_SHEETS_SPREADSHEET_ID ||
+      process.env.SHEET_ID ||
+      "";
+
+    const range =
+      process.env.GOOGLE_SHEETS_RANGE || process.env.SHEET_RANGE || "2025!A1:Z";
+
     if (!spreadsheetId) {
       return NextResponse.json(
-        { ok: false, error: "Missing env GOOGLE_SHEETS_SPREADSHEET_ID" },
+        { ok: false, error: "Missing env GOOGLE_SHEETS_SPREADSHEET_ID (or SHEET_ID)" },
         { status: 500 }
       );
     }
 
-    // IMPORTANTE: traer filas, no solo headers
-    // Si no tienes env, por defecto trae A..Z entero
-    const range = process.env.GOOGLE_SHEETS_RANGE || "2025!A1:Z";
+    const rawSa = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "";
+    if (!rawSa) {
+      return NextResponse.json(
+        { ok: false, error: "Missing env GOOGLE_SERVICE_ACCOUNT_JSON" },
+        { status: 500 }
+      );
+    }
 
-    const sa = getSheetsServiceAccountJson();
+    const sa = parseServiceAccount(rawSa);
 
     const jwt = new google.auth.JWT({
       email: sa.client_email,

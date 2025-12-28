@@ -1,122 +1,56 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
-type ApiResp = {
-  ok: boolean;
-  error?: string;
-  values?: string[][];
-};
+type ApiResp =
+  | { ok: true; values: any[][]; range: string; spreadsheetId: string }
+  | { ok: false; error: string };
 
-function colToIndex(letter: string) {
-  // A=0, B=1 ... Z=25, AA=26...
-  let n = 0;
-  const s = letter.toUpperCase();
-  for (let i = 0; i < s.length; i++) {
-    n = n * 26 + (s.charCodeAt(i) - 64);
-  }
-  return n - 1;
-}
-
-function parseMoney(v: any): number {
+function toNumber(v: any): number {
   if (v === null || v === undefined) return 0;
-  const s = String(v)
+  if (typeof v === "number") return v;
+
+  const s = String(v).trim();
+  if (!s) return 0;
+
+  // soporta: "12", "12.5", "12,5", "12 €", "1.234,56"
+  const normalized = s
     .replace(/\s/g, "")
     .replace("€", "")
-    .replace(/\./g, "") // por si metes 1.234,56
-    .replace(",", "."); // 123,45 -> 123.45
-  const num = Number(s);
-  return Number.isFinite(num) ? num : 0;
+    .replace(/\./g, "") // miles
+    .replace(",", "."); // decimales
+
+  const n = Number(normalized);
+  return Number.isFinite(n) ? n : 0;
 }
 
-function isRowEmpty(row: string[] | undefined, cols: string[]) {
-  if (!row) return true;
-  return cols.every((c) => {
-    const v = row[colToIndex(c)];
-    return !v || String(v).trim() === "";
-  });
-}
-
-function sumColumn(values: string[][], col: string, stopCols: string[]) {
-  const idx = colToIndex(col);
-  let total = 0;
-
-  // values[0] es header
-  for (let r = 1; r < values.length; r++) {
-    if (isRowEmpty(values[r], stopCols)) break;
-    total += parseMoney(values[r]?.[idx]);
-  }
-  return total;
-}
-
-function sumManyColumnsPerRow(values: string[][], colsToSum: string[], stopCols: string[]) {
-  const idxs = colsToSum.map(colToIndex);
-  let total = 0;
-
-  for (let r = 1; r < values.length; r++) {
-    if (isRowEmpty(values[r], stopCols)) break;
-
-    for (const idx of idxs) {
-      total += parseMoney(values[r]?.[idx]);
-    }
-  }
-  return total;
+function formatEUR(n: number) {
+  return n.toLocaleString("es-ES", { style: "currency", currency: "EUR" });
 }
 
 export default function SheetsTest() {
   const [loading, setLoading] = useState(false);
-  const [raw, setRaw] = useState<ApiResp | null>(null);
+  const [data, setData] = useState<ApiResp | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const [ingresos, setIngresos] = useState(0);
-  const [gastos, setGastos] = useState(0);
-  const [ahorro, setAhorro] = useState(0);
-  const [inversion, setInversion] = useState(0);
 
   async function readSheet() {
     setLoading(true);
     setError(null);
+    setData(null);
 
     try {
       const res = await fetch("/api/sheets", { cache: "no-store" });
-      const json: ApiResp = await res.json();
+      const text = await res.text();
 
-      setRaw(json);
-
-      if (!res.ok || !json?.ok || !json.values?.length) {
-        throw new Error(json?.error || `HTTP ${res.status}`);
+      let json: any = null;
+      try {
+        json = text ? JSON.parse(text) : null;
+      } catch {
+        throw new Error(`Respuesta no-JSON: ${text.slice(0, 200)}`);
       }
 
-      const values = json.values;
-
-      // ✅ Ajusta aquí SOLO si cambias tu sheet
-      // Gastos: columnas con totales por categoría (según tu ejemplo)
-      // D = TOTAL_MENSU, G = TOTAL_OCIO, J = TOTAL_TRABAJO, M = TOTAL_DEPORTE, P = TOTAL_COMIDA
-      // + W si la usas como total de otra categoría (déjala si existe)
-      const GASTOS_TOTAL_COLS = ["D", "G", "J", "M", "P", "W"];
-
-      // Ingresos: tu “total ingresos” suele ser S (porque Q=INGRESOS, R=FECHA, S=TOTAL)
-      const INGRESOS_TOTAL_COL = "S";
-
-      // Ahorro: suele ser V (T=AHORRO, U=FECHA, V=TOTAL)
-      const AHORRO_TOTAL_COL = "V";
-
-      // Inversión: tú dijiste Z
-      const INVERSION_TOTAL_COL = "Z";
-
-      // Para “parar” al llegar a la primera fila sin registros:
-      // usa una columna “siempre rellena” cuando hay datos. Normalmente B (MENSUAL) o D (TOTAL_MENSU) funcionan.
-      const STOP_COLS = ["B", "D"];
-
-      const totalGastos = sumManyColumnsPerRow(values, GASTOS_TOTAL_COLS, STOP_COLS);
-      const totalIngresos = sumColumn(values, INGRESOS_TOTAL_COL, STOP_COLS);
-      const totalAhorro = sumColumn(values, AHORRO_TOTAL_COL, STOP_COLS);
-      const totalInversion = sumColumn(values, INVERSION_TOTAL_COL, STOP_COLS);
-
-      setGastos(totalGastos);
-      setIngresos(totalIngresos);
-      setAhorro(totalAhorro);
-      setInversion(totalInversion);
+      if (!res.ok || !json?.ok) throw new Error(json?.error || `HTTP ${res.status}`);
+      setData(json);
     } catch (e: any) {
       setError(e?.message || "Error");
     } finally {
@@ -124,41 +58,85 @@ export default function SheetsTest() {
     }
   }
 
-  const eur = (n: number) =>
-    n.toLocaleString("es-ES", { style: "currency", currency: "EUR" });
+  const summary = useMemo(() => {
+    if (!data || !data.ok) {
+      return { ingresos: 0, gastos: 0, ahorro: 0, inversion: 0 };
+    }
+
+    const values = data.values ?? [];
+    if (values.length <= 1) {
+      return { ingresos: 0, gastos: 0, ahorro: 0, inversion: 0 };
+    }
+
+    // fila 0 = headers, empezamos en 1
+    const rows = values.slice(1);
+
+    // Cortar cuando la fila esté completamente vacía
+    const effective: any[][] = [];
+    for (const r of rows) {
+      const isEmpty = (r ?? []).every((cell: any) => String(cell ?? "").trim() === "");
+      if (isEmpty) break;
+      effective.push(r ?? []);
+    }
+
+    // Índices (0-based): A=0, B=1, ...
+    const COL = {
+      D: 3,  // TOTAL_MENSUAL
+      G: 6,  // TOTAL_OCIO
+      J: 9,  // TOTAL_TRABAJO
+      M: 12, // TOTAL_DEPORTE
+      P: 15, // TOTAL_COMIDA
+      Y: 24, // TOTAL (NO_CLASIFICADO)
+      S: 18, // TOTAL_INGRESOS
+      V: 21, // TOTAL_AHORRO
+      Z: 25, // INVERSION (tu columna nueva)
+    };
+
+    let gastos = 0;
+    let ingresos = 0;
+    let ahorro = 0;
+    let inversion = 0;
+
+    for (const r of effective) {
+      gastos +=
+        toNumber(r[COL.D]) +
+        toNumber(r[COL.G]) +
+        toNumber(r[COL.J]) +
+        toNumber(r[COL.M]) +
+        toNumber(r[COL.P]) +
+        toNumber(r[COL.Y]);
+
+      ingresos += toNumber(r[COL.S]);
+      ahorro += toNumber(r[COL.V]);
+      inversion += toNumber(r[COL.Z]);
+    }
+
+    return { ingresos, gastos, ahorro, inversion };
+  }, [data]);
 
   return (
     <main style={{ padding: 24, maxWidth: 900, margin: "0 auto" }}>
       <h1 style={{ textAlign: "center" }}>Google Sheets ✅</h1>
 
-      <div style={{ textAlign: "center", marginTop: 12 }}>
-        <button
-          onClick={readSheet}
-          style={{ border: "1px solid #999", padding: "8px 12px" }}
-          disabled={loading}
-        >
-          {loading ? "Leyendo..." : "Leer Google Sheet"}
+      <div style={{ display: "flex", justifyContent: "center", margin: "16px 0" }}>
+        <button onClick={readSheet} style={{ border: "1px solid #999", padding: "8px 12px" }}>
+          Leer Google Sheet
         </button>
       </div>
 
-      <h2 style={{ marginTop: 28 }}>Resumen</h2>
-      <div style={{ lineHeight: 2 }}>
-        <div><b>Ingresos:</b> {eur(ingresos)}</div>
-        <div><b>Gastos:</b> {eur(gastos)}</div>
-        <div><b>Ahorro:</b> {eur(ahorro)}</div>
-        <div><b>Inversión:</b> {eur(inversion)}</div>
-      </div>
+      <h2>Resumen</h2>
+      <p><b>Ingresos:</b> {formatEUR(summary.ingresos)}</p>
+      <p><b>Gastos:</b> {formatEUR(summary.gastos)}</p>
+      <p><b>Ahorro:</b> {formatEUR(summary.ahorro)}</p>
+      <p><b>Inversión:</b> {formatEUR(summary.inversion)}</p>
 
-      <hr style={{ margin: "16px 0" }} />
+      {loading && <p style={{ marginTop: 16 }}>Cargando...</p>}
+      {error && <pre style={{ marginTop: 16, color: "tomato" }}>Error: {error}</pre>}
 
-      {error && <pre style={{ color: "tomato" }}>Error: {error}</pre>}
-
-      {raw && (
-        <details>
+      {data && (
+        <details style={{ marginTop: 16 }}>
           <summary>Ver JSON completo</summary>
-          <pre style={{ whiteSpace: "pre-wrap" }}>
-            {JSON.stringify(raw, null, 2)}
-          </pre>
+          <pre>{JSON.stringify(data, null, 2)}</pre>
         </details>
       )}
     </main>
