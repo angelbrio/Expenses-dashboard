@@ -28,6 +28,17 @@ function formatEUR(n: number) {
   return n.toLocaleString("es-ES", { style: "currency", currency: "EUR" });
 }
 
+function findCol(headers: any[], candidates: string[]): number | null {
+  const norm = (x: any) => String(x ?? "").trim().toUpperCase();
+  const H = headers.map(norm);
+
+  for (const c of candidates) {
+    const idx = H.indexOf(norm(c));
+    if (idx !== -1) return idx;
+  }
+  return null;
+}
+
 export default function SheetsTest() {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ApiResp | null>(null);
@@ -59,19 +70,15 @@ export default function SheetsTest() {
   }
 
   const summary = useMemo(() => {
-    if (!data || !data.ok) {
-      return { ingresos: 0, gastos: 0, ahorro: 0, inversion: 0 };
-    }
+    if (!data || !data.ok) return { ingresos: 0, gastos: 0, ahorro: 0, inversion: 0 };
 
     const values = data.values ?? [];
-    if (values.length <= 1) {
-      return { ingresos: 0, gastos: 0, ahorro: 0, inversion: 0 };
-    }
+    if (values.length <= 1) return { ingresos: 0, gastos: 0, ahorro: 0, inversion: 0 };
 
-    // fila 0 = headers, empezamos en 1
+    const headers = values[0] ?? [];
     const rows = values.slice(1);
 
-    // Cortar cuando la fila esté completamente vacía
+    // cortar al encontrar una fila totalmente vacía
     const effective: any[][] = [];
     for (const r of rows) {
       const isEmpty = (r ?? []).every((cell: any) => String(cell ?? "").trim() === "");
@@ -79,18 +86,22 @@ export default function SheetsTest() {
       effective.push(r ?? []);
     }
 
-    // Índices (0-based): A=0, B=1, ...
-    const COL = {
-      D: 3,  // TOTAL_MENSUAL
-      G: 6,  // TOTAL_OCIO
-      J: 9,  // TOTAL_TRABAJO
-      M: 12, // TOTAL_DEPORTE
-      P: 15, // TOTAL_COMIDA
-      Y: 24, // TOTAL (NO_CLASIFICADO)
-      S: 18, // TOTAL_INGRESOS
-      V: 21, // TOTAL_AHORRO
-      Z: 25, // INVERSION (tu columna nueva)
-    };
+    // --- Columnas por header (robusto) ---
+    // Gastos: usamos los TOTAL_* de categorías (como ya te funciona)
+    const colTotalMensual = findCol(headers, ["TOTAL_MENSUAL", "TOTAL_MENSU"]);
+    const colTotalOcio = findCol(headers, ["TOTAL_OCIO"]);
+    const colTotalTrabajo = findCol(headers, ["TOTAL_TRABAJO"]);
+    const colTotalDeporte = findCol(headers, ["TOTAL_DEPORTE"]);
+    const colTotalComida = findCol(headers, ["TOTAL_COMIDA"]);
+    const colTotalNoClasificado = findCol(headers, ["TOTAL", "TOTAL_NO_CLASIFICADO"]);
+
+    // Ingresos / Ahorro / Inversión:
+    // si existen TOTAL_* los usamos; si no, usamos INGRESOS / AHORRO / INVERSION
+    const colTotalIngresos = findCol(headers, ["TOTAL_INGRESOS"]);
+    const colIngresos = findCol(headers, ["INGRESOS"]); // en tu caso Q
+    const colTotalAhorro = findCol(headers, ["TOTAL_AHORRO"]);
+    const colAhorro = findCol(headers, ["AHORRO"]); // en tu caso T
+    const colInversion = findCol(headers, ["INVERSION", "INVERSIÓN"]); // tu Z
 
     let gastos = 0;
     let ingresos = 0;
@@ -98,17 +109,24 @@ export default function SheetsTest() {
     let inversion = 0;
 
     for (const r of effective) {
-      gastos +=
-        toNumber(r[COL.D]) +
-        toNumber(r[COL.G]) +
-        toNumber(r[COL.J]) +
-        toNumber(r[COL.M]) +
-        toNumber(r[COL.P]) +
-        toNumber(r[COL.Y]);
+      // Gastos (solo si la columna existe)
+      if (colTotalMensual !== null) gastos += toNumber(r[colTotalMensual]);
+      if (colTotalOcio !== null) gastos += toNumber(r[colTotalOcio]);
+      if (colTotalTrabajo !== null) gastos += toNumber(r[colTotalTrabajo]);
+      if (colTotalDeporte !== null) gastos += toNumber(r[colTotalDeporte]);
+      if (colTotalComida !== null) gastos += toNumber(r[colTotalComida]);
+      if (colTotalNoClasificado !== null) gastos += toNumber(r[colTotalNoClasificado]);
 
-      ingresos += toNumber(r[COL.S]);
-      ahorro += toNumber(r[COL.V]);
-      inversion += toNumber(r[COL.Z]);
+      // Ingresos: preferimos TOTAL_INGRESOS, si no existe usamos INGRESOS
+      if (colTotalIngresos !== null) ingresos += toNumber(r[colTotalIngresos]);
+      else if (colIngresos !== null) ingresos += toNumber(r[colIngresos]);
+
+      // Ahorro: preferimos TOTAL_AHORRO, si no existe usamos AHORRO
+      if (colTotalAhorro !== null) ahorro += toNumber(r[colTotalAhorro]);
+      else if (colAhorro !== null) ahorro += toNumber(r[colAhorro]);
+
+      // Inversión
+      if (colInversion !== null) inversion += toNumber(r[colInversion]);
     }
 
     return { ingresos, gastos, ahorro, inversion };
