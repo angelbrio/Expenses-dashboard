@@ -2,43 +2,81 @@
 
 import { useState } from "react";
 
-function colIndex(headers: string[], name: string) {
-  return headers.indexOf(name);
+type ApiResponse = {
+  ok: boolean;
+  values?: string[][];
+  error?: string;
+};
+
+function parseAmount(v: unknown): number {
+  if (v == null) return 0;
+  const s = String(v)
+    .trim()
+    .replace(/\s/g, "")
+    .replace(/€/g, "")
+    .replace(/\./g, "") // miles "1.234" -> "1234"
+    .replace(/,/g, "."); // decimales "12,34" -> "12.34"
+
+  const n = Number.parseFloat(s);
+  return Number.isFinite(n) ? n : 0;
 }
 
-function sumColumn(rows: string[][], index: number): number {
-  if (index < 0) return 0;
+function formatEUR(n: number) {
+  return new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(n);
+}
 
+function buildIndexMap(header: string[]) {
+  const idx: Record<string, number> = {};
+  header.forEach((h, i) => {
+    const key = (h ?? "").trim().toUpperCase();
+    if (key) idx[key] = i;
+  });
+  return idx;
+}
+
+function sumColumn(rows: string[][], colIndex: number) {
+  if (colIndex == null || colIndex < 0) return 0;
   let sum = 0;
 
-  for (const row of rows) {
-    const value = row[index];
+  for (const r of rows) {
+    // si la fila está completamente vacía, paramos (tu regla)
+    const allEmpty = r.every((c) => !String(c ?? "").trim());
+    if (allEmpty) break;
 
-    // regla: cuando está vacío, dejamos de contar
-    if (!value || value.trim() === "") break;
-
-    // soporta "12", "12.5", y también "12,5"
-    const num = Number(value.replace(",", "."));
-    if (!Number.isNaN(num)) sum += num;
+    sum += parseAmount(r[colIndex]);
   }
-
   return sum;
 }
 
-function sumMultipleColumns(
-  rows: string[][],
-  headers: string[],
-  columnNames: string[]
-): number {
-  return columnNames.reduce((acc, name) => {
-    const idx = colIndex(headers, name);
-    return acc + sumColumn(rows, idx);
-  }, 0);
+function sumExpensesByTotals(header: string[], rows: string[][]) {
+  const upper = header.map((h) => (h ?? "").trim().toUpperCase());
+
+  // Gastos = suma de todas las columnas que empiezan por TOTAL_
+  // excepto ingresos/ahorro/inversion
+  const expenseTotalCols = upper
+    .map((h, i) => ({ h, i }))
+    .filter(
+      ({ h }) =>
+        h.startsWith("TOTAL_") &&
+        h !== "TOTAL_INGRESOS" &&
+        h !== "TOTAL_AHORRO" &&
+        h !== "TOTAL_INVERSION"
+    )
+    .map(({ i }) => i);
+
+  let sum = 0;
+  for (const r of rows) {
+    const allEmpty = r.every((c) => !String(c ?? "").trim());
+    if (allEmpty) break;
+
+    for (const i of expenseTotalCols) sum += parseAmount(r[i]);
+  }
+  return sum;
 }
 
 export default function SheetsTest() {
   const [loading, setLoading] = useState(false);
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<ApiResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function readSheet() {
@@ -49,12 +87,9 @@ export default function SheetsTest() {
     try {
       const res = await fetch("/api/sheets", { cache: "no-store" });
       const text = await res.text();
-      const json = text ? JSON.parse(text) : null;
+      const json = text ? (JSON.parse(text) as ApiResponse) : null;
 
-      if (!res.ok || !json?.ok) {
-        throw new Error(json?.error || `HTTP ${res.status}`);
-      }
-
+      if (!res.ok || !json?.ok) throw new Error(json?.error || `HTTP ${res.status}`);
       setData(json);
     } catch (e: any) {
       setError(e?.message || "Error");
@@ -63,68 +98,69 @@ export default function SheetsTest() {
     }
   }
 
-  // --- cálculos (solo si hay data) ---
-  let totalIngresos = 0;
-  let totalAhorro = 0;
-  let totalGastos = 0;
+  const values = data?.values ?? [];
+  const header = values[0] ?? [];
+  const rows = values.slice(1);
 
-  if (data?.values?.length >= 2) {
-    const values: string[][] = data.values;
-    const headers = values[0];
-    const rows = values.slice(1);
+  const idx = buildIndexMap(header);
 
-    totalIngresos = sumColumn(rows, colIndex(headers, "TOTAL_INGRESOS"));
-    totalAhorro = sumColumn(rows, colIndex(headers, "TOTAL_AHORRO"));
+  const ingresos =
+    idx["TOTAL_INGRESOS"] != null
+      ? sumColumn(rows, idx["TOTAL_INGRESOS"])
+      : idx["INGRESOS"] != null
+      ? sumColumn(rows, idx["INGRESOS"])
+      : 0;
 
-    totalGastos = sumMultipleColumns(rows, headers, [
-      "TOTAL_MENSUAL",
-      "TOTAL_OCIO",
-      "TOTAL_TRABAJO",
-      "TOTAL_DEPORTE",
-      "TOTAL_COMIDA",
-      "TOTAL_NO_CLASIFICADO",
-    ]);
-  }
+  const ahorro =
+    idx["TOTAL_AHORRO"] != null
+      ? sumColumn(rows, idx["TOTAL_AHORRO"])
+      : idx["AHORRO"] != null
+      ? sumColumn(rows, idx["AHORRO"])
+      : 0;
+
+  // Inversión: soporta "TOTAL_INVERSION" o "INVERSION"
+  const inversion =
+    idx["TOTAL_INVERSION"] != null
+      ? sumColumn(rows, idx["TOTAL_INVERSION"])
+      : idx["INVERSION"] != null
+      ? sumColumn(rows, idx["INVERSION"])
+      : 0;
+
+  const gastos = sumExpensesByTotals(header, rows);
 
   return (
-    <main style={{ padding: 24 }}>
-      <h1>Google Sheets ✅</h1>
+    <main style={{ padding: 24, maxWidth: 900, margin: "0 auto" }}>
+      <h1 style={{ textAlign: "center" }}>Google Sheets ✅</h1>
 
-      <button
-        onClick={readSheet}
-        style={{ border: "1px solid #999", padding: "8px 12px" }}
-        disabled={loading}
-      >
-        {loading ? "Cargando..." : "Leer Google Sheet"}
-      </button>
+      <div style={{ textAlign: "center", margin: "12px 0" }}>
+        <button onClick={readSheet} style={{ border: "1px solid #999", padding: "8px 12px" }}>
+          Leer Google Sheet
+        </button>
+      </div>
 
-      {error && (
-        <pre style={{ marginTop: 16, color: "tomato" }}>Error: {error}</pre>
-      )}
+      {loading && <p style={{ textAlign: "center" }}>Cargando...</p>}
+      {error && <pre style={{ color: "tomato" }}>Error: {error}</pre>}
 
-      {data && (
-        <div style={{ marginTop: 24 }}>
-          <h2>Resumen</h2>
-          <p>
-            <b>Ingresos:</b> {totalIngresos} €
-          </p>
-          <p>
-            <b>Gastos:</b> {totalGastos} €
-          </p>
-          <p>
-            <b>Ahorro:</b> {totalAhorro} €
-          </p>
+      <h2>Resumen</h2>
+      <p>
+        <b>Ingresos:</b> {formatEUR(ingresos)}
+      </p>
+      <p>
+        <b>Gastos:</b> {formatEUR(gastos)}
+      </p>
+      <p>
+        <b>Ahorro:</b> {formatEUR(ahorro)}
+      </p>
+      <p>
+        <b>Inversión:</b> {formatEUR(inversion)}
+      </p>
 
-          <hr style={{ margin: "16px 0" }} />
+      <hr style={{ margin: "16px 0" }} />
 
-          <details>
-            <summary>Ver JSON completo</summary>
-            <pre style={{ marginTop: 12 }}>
-              {JSON.stringify(data, null, 2)}
-            </pre>
-          </details>
-        </div>
-      )}
+      <details>
+        <summary style={{ cursor: "pointer" }}>Ver JSON completo</summary>
+        <pre style={{ marginTop: 12 }}>{JSON.stringify(data, null, 2)}</pre>
+      </details>
     </main>
   );
 }
