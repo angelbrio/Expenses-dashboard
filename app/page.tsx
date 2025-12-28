@@ -1,27 +1,16 @@
-export const dynamic = "force-dynamic";
+import SheetsTest from "@/app/components/SheetsTest";
 
-async function getData() {
-  const base = process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : "http://localhost:3000";
-
-  const res = await fetch(`${base}/api/sheets`, { cache: "no-store" });
-  const text = await res.text();
-
-  try {
-    return { ok: res.ok, status: res.status, json: JSON.parse(text) };
-  } catch {
-    return { ok: res.ok, status: res.status, raw: text };
-  }
-}
-
-export default async function Page() {
-  const data = await getData();
-
+export default function Page() {
   return (
-    <main style={{ padding: 24, fontFamily: "system-ui" }}>
-      <h1>Google Sheets ✅</h1>
-      <pre style={{ marginTop: 16 }}>{JSON.stringify(data, null, 2)}</pre>
+    <main
+      style={{
+        maxWidth: 900,
+        margin: "0 auto",
+        padding: "32px 24px",
+        fontFamily: "system-ui, -apple-system, sans-serif",
+      }}
+    >
+      <SheetsTest />
     </main>
   );
 }
